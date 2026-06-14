@@ -1,0 +1,74 @@
+[package]
+name = "convert-ffi"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+leptos = { version = "0.8" }
+leptos_router = { version = "0.8" }
+leptos_meta = { version = "0.8" }
+leptos_axum = { version = "0.8", optional = true }
+
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+
+serde = { version = "1.0.219", features = ["derive"] }
+console_error_panic_hook = { version = "0.1", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+
+# Client-side (wasm) only: read file bytes from the browser and parse audio tags.
+gloo-file = { version = "0.3", features = ["futures"], optional = true }
+lofty = { version = "0.22", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "HtmlInputElement",
+] }
+
+[features]
+default = []
+hydrate = [
+    "leptos/hydrate",
+    "dep:console_error_panic_hook",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:gloo-file",
+    "dep:lofty",
+    "dep:web-sys",
+]
+ssr = [
+    "dep:axum",
+    "dep:tokio",
+    "dep:leptos_axum",
+    "leptos/ssr",
+    "leptos_meta/ssr",
+    "leptos_router/ssr",
+]
+
+[package.metadata.leptos]
+output-name = "convert-ffi"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+style-file = "style/main.scss"
+assets-dir = "public"
+site-addr = "127.0.0.1:5000"
+reload-port = 3001
+browserquery = "defaults"
+bin-features = ["ssr"]
+bin-default-features = false
+lib-features = ["hydrate"]
+lib-default-features = false
+lib-profile-release = "wasm-release"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,9 @@
+# Build artifacts — rebuilt inside the image.
+/target
+convert-songs/zig-out
+convert-songs/.zig-cache
+convert-songs/zig-cache
+# VCS / local secrets — never needed in the image.
+.git
+.env
+convert-songs/src/.env

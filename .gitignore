@@ -1,0 +1,5 @@
+/target
+# Local Spotify creds (client_id / client_secret). Injected via env vars in prod.
+.env
+# Cached Spotify token (bearer token — never commit).
+dump.a

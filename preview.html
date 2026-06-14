@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>convert-songs · UI preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Hanken+Grotesk:wght@400;500;600;700&family=Martian+Mono:wght@400;500;600&display=swap" />
+<link rel="stylesheet" href="target/site/pkg/convert-ffi.css" />
+</head>
+<body>
+<header class="masthead">
+  <div class="brand">
+    <svg class="mark" width="40" height="40" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <circle class="ring" cx="24" cy="24" r="18" />
+      <circle class="ring inner" cx="24" cy="24" r="11" />
+      <g class="scan"><line class="tick" x1="24" y1="3.5" x2="24" y2="11" /></g>
+      <circle class="hub" cx="24" cy="24" r="3" />
+    </svg>
+    <span class="wordmark">convert<b>songs</b></span>
+  </div>
+</header>
+
+<p class="lede">The music sitting on your drive, back in rotation. Point Convert Songs at your local files, it finds each track on Spotify, and you pick the right matches — then it builds the playlist.</p>
+
+<label class="picker">
+  <span class="picker-cta">Choose music files</span>
+  <span class="picker-hint">MP3 · FLAC · M4A — pick as many as you like</span>
+</label>
+
+<div class="toolbar">
+  <input class="pl-name" type="text" value="Summer '09 — rescued" />
+  <span class="counter">2 / 4 matched</span>
+  <button class="create">Create Spotify playlist</button>
+</div>
+
+<p class="result ok">Playlist created — <a href="#">open.spotify.com/playlist/3xR…</a></p>
+
+<div class="songs">
+  <!-- resolved, selected -->
+  <div class="song">
+    <div class="song-head">
+      <div class="song-meta"><span class="name">This Must Be the Place</span><span class="sub">Talking Heads · Speaking in Tongues</span></div>
+      <span class="file">04 - this_must_be_the_place.flac</span>
+    </div>
+    <div class="cands"><div class="radio-group">
+      <label class="cand selected"><input type="radio" name="r1" checked />
+        <span class="art" style="display:grid;place-items:center;color:#e48e26;font-size:1.2rem">♪</span>
+        <span class="cand-text">This Must Be the Place (Naive Melody) — Talking Heads — Speaking in Tongues</span></label>
+      <label class="cand"><input type="radio" name="r1" />
+        <span class="art" style="display:grid;place-items:center;color:#70e8cf;font-size:1.2rem">♪</span>
+        <span class="cand-text">This Must Be the Place — Live — Talking Heads — Stop Making Sense</span></label>
+      <label class="cand skip"><input type="radio" name="r1" /><span class="cand-text">Skip this track</span></label>
+    </div></div>
+  </div>
+
+  <!-- resolving -->
+  <div class="song">
+    <div class="song-head">
+      <div class="song-meta"><span class="name">Teardrop</span><span class="sub">Massive Attack · Mezzanine</span></div>
+      <span class="file">teardrop.mp3</span>
+    </div>
+    <div class="cands"><div class="status"><span class="pill pill-amber">resolving</span></div></div>
+  </div>
+
+  <!-- no match -->
+  <div class="song">
+    <div class="song-head">
+      <div class="song-meta"><span class="name">track_07_unknown.mp3</span><span class="sub"></span></div>
+      <span class="file">track_07_unknown.mp3</span>
+    </div>
+    <div class="cands"><div class="status"><span class="pill pill-ghost">no match</span></div></div>
+  </div>
+
+  <!-- resolved, skip selected -->
+  <div class="song">
+    <div class="song-head">
+      <div class="song-meta"><span class="name">Intro</span><span class="sub">Unknown Artist</span></div>
+      <span class="file">01-intro.m4a</span>
+    </div>
+    <div class="cands"><div class="radio-group">
+      <label class="cand"><input type="radio" name="r4" />
+        <span class="art" style="display:grid;place-items:center;color:#e48e26;font-size:1.2rem">♪</span>
+        <span class="cand-text">Intro — Some Band — Some Album</span></label>
+      <label class="cand skip selected"><input type="radio" name="r4" checked /><span class="cand-text">Skip this track</span></label>
+    </div></div>
+  </div>
+</div>
+</body>
+</html>

@@ -279,6 +279,10 @@ fn HomePage() -> impl IntoView {
     let create_result = RwSignal::new(None::<Result<String, String>>);
     // (current step, slide direction): one signal so a step change is atomic.
     let nav = RwSignal::new((Step::Add, 1i8));
+    // Spotify's embed CDN lags a few seconds behind playlist creation, so a fresh
+    // playlist renders empty if the iframe mounts immediately. Gate the embed on
+    // this flag, flipped by a short timer once the playlist is created.
+    let embed_ready = RwSignal::new(false);
     // Diagnostics panel output (None = not run yet).
     let diag = RwSignal::new(None::<String>);
     let run_diag = move |_: leptos::web_sys::MouseEvent| {
@@ -409,6 +413,12 @@ fn HomePage() -> impl IntoView {
             creating.set(false);
             if res.is_ok() {
                 nav.set((Step::Done, 1));
+                // Hold the embed back until Spotify has indexed the new playlist.
+                embed_ready.set(false);
+                set_timeout(
+                    move || embed_ready.set(true),
+                    std::time::Duration::from_secs(4),
+                );
             }
             create_result.set(Some(res));
         });
@@ -938,8 +948,26 @@ fn HomePage() -> impl IntoView {
                                 <p class="pane-sub">"Added to your Spotify account."</p>
                                 {embed
                                     .map(|e| {
-                                        view! {
-                                            <iframe class="sp-embed" src=e width="100%" height="380"></iframe>
+                                        move || {
+                                            if embed_ready.get() {
+                                                view! {
+                                                    <iframe
+                                                        class="sp-embed"
+                                                        src=e.clone()
+                                                        width="100%"
+                                                        height="380"
+                                                    ></iframe>
+                                                }
+                                                    .into_any()
+                                            } else {
+                                                view! {
+                                                    <div class="sp-embed sp-embed-loading">
+                                                        <Mark size=28 />
+                                                        <span>"Preparing your playlist preview…"</span>
+                                                    </div>
+                                                }
+                                                    .into_any()
+                                            }
                                         }
                                     })}
                                 <div class="wizard-nav center">

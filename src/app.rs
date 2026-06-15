@@ -909,7 +909,7 @@ fn HomePage() -> impl IntoView {
                             </button>
                             <button
                                 class="btn-primary"
-                                disabled=move || resolving_count() > 0 || matched_count() == 0
+                                disabled=move || (resolving_count() > 0 || matched_count() == 0)
                                 on:click=move |_: leptos::web_sys::MouseEvent| go(Step::Preview)
                             >
                                 {move || {

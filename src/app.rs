@@ -114,6 +114,26 @@ fn kind(r: &Row) -> Kind {
     }
 }
 
+/// The four stages of the flow. Ordering matters: cast to i8 gives slide
+/// direction (a higher target slides in from the right).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Add,
+    Match,
+    Preview,
+    Done,
+}
+
+/// Turn a Spotify playlist URL or URI into its embeddable iframe src.
+fn embed_src(url: &str) -> Option<String> {
+    let id = url
+        .rsplit(['/', ':'])
+        .next()?
+        .split(['?', '#'])
+        .next()?;
+    (!id.is_empty()).then(|| format!("https://open.spotify.com/embed/playlist/{id}"))
+}
+
 /// Resolve a batch of locally-parsed tags against Spotify via the native Zig
 /// library, returning up to 5 candidates per track (index-aligned with input).
 /// Only the tag strings cross the wire — never the audio.
@@ -140,6 +160,38 @@ pub async fn resolve_tracks(
 #[server(name = AuthStatus, prefix = "/api")]
 pub async fn auth_status() -> Result<bool, ServerFnError> {
     Ok(cookie_value("sp_token").await.is_some())
+}
+
+/// Diagnostics surfaced in the UI to debug deployments where search returns no
+/// matches. Reports whether the Spotify creds are present in the *server* process
+/// environment (the same env the native `.so` reads), plus a live token-fetch
+/// probe through the `.so`. Never echoes secret values — only presence/length.
+#[server(name = Diagnostics, prefix = "/api")]
+pub async fn diagnostics() -> Result<String, ServerFnError> {
+    let present = |k: &str| match std::env::var(k) {
+        Ok(v) if !v.is_empty() => format!("set ({} chars)", v.len()),
+        Ok(_) => "set but EMPTY".to_string(),
+        Err(_) => "MISSING".to_string(),
+    };
+    let id = present("SPOTIFY_CLIENT_ID");
+    let secret = present("SPOTIFY_CLIENT_SECRET");
+    let redirect = std::env::var("REDIRECT_URI").unwrap_or_else(|_| "(unset → loopback default)".into());
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "(unknown)".into());
+    let dump = std::path::Path::new("dump.a").exists();
+    // The probe does blocking HTTPS inside Zig — keep it off the async reactor.
+    let probe = tokio::task::spawn_blocking(crate::ffi::debug_probe_safe)
+        .await
+        .unwrap_or_else(|e| format!("probe task failed: {e}"));
+    Ok(format!(
+        "SPOTIFY_CLIENT_ID: {id}\n\
+         SPOTIFY_CLIENT_SECRET: {secret}\n\
+         REDIRECT_URI: {redirect}\n\
+         cwd: {cwd}\n\
+         dump.a cached: {dump}\n\
+         zig token probe: {probe}"
+    ))
 }
 
 /// Create a Spotify playlist from the selected track URIs, using the user token
@@ -225,6 +277,19 @@ fn HomePage() -> impl IntoView {
     let authed = RwSignal::new(false);
     let creating = RwSignal::new(false);
     let create_result = RwSignal::new(None::<Result<String, String>>);
+    // (current step, slide direction): one signal so a step change is atomic.
+    let nav = RwSignal::new((Step::Add, 1i8));
+    // Diagnostics panel output (None = not run yet).
+    let diag = RwSignal::new(None::<String>);
+    let run_diag = move |_: leptos::web_sys::MouseEvent| {
+        diag.set(Some("running…".to_string()));
+        spawn_local(async move {
+            let out = diagnostics()
+                .await
+                .unwrap_or_else(|e| format!("diagnostics call failed: {e}"));
+            diag.set(Some(out));
+        });
+    };
 
     // Check auth status once, client-side (Effects don't run during SSR).
     Effect::new(move |_| {
@@ -259,6 +324,11 @@ fn HomePage() -> impl IntoView {
                     })
                 });
                 pending.push((id, gloo_file::Blob::from(file)));
+            }
+
+            // Adding files carries the user into the matching step.
+            if !pending.is_empty() {
+                nav.set((Step::Match, 1));
             }
 
             spawn_local(async move {
@@ -337,6 +407,9 @@ fn HomePage() -> impl IntoView {
         spawn_local(async move {
             let res = create_playlist(name, uris).await.map_err(|e| e.to_string());
             creating.set(false);
+            if res.is_ok() {
+                nav.set((Step::Done, 1));
+            }
             create_result.set(Some(res));
         });
     };
@@ -360,6 +433,20 @@ fn HomePage() -> impl IntoView {
         })
     };
 
+    let step = move || nav.get().0;
+    let dir = move || nav.get().1;
+    let go = move |t: Step| {
+        let cur = nav.get_untracked().0 as i8;
+        nav.set((t, if (t as i8) >= cur { 1 } else { -1 }));
+    };
+    let matched_count = move || counts().0;
+    let resolving_count = move || counts().3;
+    let reset = move |_: leptos::web_sys::MouseEvent| {
+        rows.set(Vec::new());
+        create_result.set(None);
+        nav.set((Step::Add, -1));
+    };
+
     view! {
         <header class="masthead">
             <div class="brand">
@@ -368,66 +455,195 @@ fn HomePage() -> impl IntoView {
             </div>
         </header>
 
-        <p class="lede">
-            "The music sitting on your drive, back in rotation. Point Convert Songs at your
-            local files, it finds each track on Spotify, and you pick the right matches —
-            then it builds the playlist."
-        </p>
-
-        <label class="picker">
-            <input type="file" multiple accept="audio/*" on:change=on_change />
-            <span class="picker-cta">"Choose music files"</span>
-            <span class="picker-hint">"MP3 · FLAC · M4A — pick as many as you like"</span>
-        </label>
-
-        <div class="toolbar">
-            <input
-                class="pl-name"
-                type="text"
-                prop:value=move || playlist_name.get()
-                on:input=move |ev| playlist_name.set(event_target_value(&ev))
-            />
-            {move || {
-                if authed.get() {
-                    view! {
-                        <button class="create" on:click=on_create disabled=move || creating.get()>
-                            {move || if creating.get() { "Creating…" } else { "Create Spotify playlist" }}
-                        </button>
-                    }
-                        .into_any()
-                } else {
-                    view! {
-                        <a class="connect" href="/login">
-                            "Connect Spotify to create a playlist"
-                        </a>
-                    }
-                        .into_any()
+        {move || {
+            let cur = step();
+            let has_rows = total() > 0;
+            let has_match = matched_count() > 0;
+            let is_done = create_result.get().map(|r| r.is_ok()).unwrap_or(false);
+            let item = move |s: Step, n: &'static str, label: &'static str, enabled: bool| {
+                let active = cur == s;
+                let done = (s as i8) < (cur as i8);
+                view! {
+                    <button
+                        class="stepper-item"
+                        class:active=active
+                        class:done=done
+                        disabled=!enabled
+                        on:click=move |_: leptos::web_sys::MouseEvent| { if enabled { go(s); } }
+                    >
+                        <span class="stepper-n">{n}</span>
+                        <span class="stepper-label">{label}</span>
+                    </button>
                 }
-            }}
-        </div>
+            };
+            view! {
+                <nav class="stepper" aria-label="Progress">
+                    {item(Step::Add, "1", "Add", true)}
+                    {item(Step::Match, "2", "Match", has_rows)}
+                    {item(Step::Preview, "3", "Preview", has_match)}
+                    {item(Step::Done, "4", "Done", is_done)}
+                </nav>
+            }
+        }}
+
+        <div class="viewport">
 
         {move || {
-            create_result
-                .get()
-                .map(|res| match res {
-                    Ok(url) => {
-                        let shown = url.clone();
-                        view! {
-                            <p class="result ok">
-                                "Playlist created — "
-                                <a href=url target="_blank">
-                                    {shown}
-                                </a>
+            (step() == Step::Add)
+                .then(|| {
+                    let pcls = if dir() >= 0 { "pane fwd" } else { "pane back" };
+                    view! {
+                        <section class=pcls>
+                            <p class="lede">
+                                "The music sitting on your drive, back in rotation. Point Convert
+                                Songs at your local files, it finds each track on Spotify, and you
+                                pick the right matches — then it builds the playlist."
                             </p>
-                        }
-                            .into_any()
+                            <label class="picker">
+                                <input type="file" multiple accept="audio/*" on:change=on_change />
+                                <span class="picker-cta">"Choose music files"</span>
+                                <span class="picker-hint">
+                                    "MP3 · FLAC · M4A — pick as many as you like"
+                                </span>
+                            </label>
+                            {move || {
+                                if authed.get() {
+                                    view! { <p class="connect-hint ok">"✓ Spotify connected"</p> }
+                                        .into_any()
+                                } else {
+                                    view! {
+                                        <p class="connect-hint">
+                                            "Saving to your account? "
+                                            <a href="/login" rel="external">"Connect Spotify"</a>
+                                            " now, before you add files."
+                                        </p>
+                                    }
+                                        .into_any()
+                                }
+                            }}
+                            <details class="diag">
+                                <summary>"Diagnostics"</summary>
+                                <button class="diag-run" on:click=run_diag>
+                                    "Run server diagnostics"
+                                </button>
+                                {move || {
+                                    diag.get()
+                                        .map(|t| view! { <pre class="diag-out">{t}</pre> })
+                                }}
+                            </details>
+                        </section>
                     }
-                    Err(e) => view! { <p class="result error">{format!("Error: {e}")}</p> }.into_any(),
                 })
         }}
 
         {move || {
-            (total() > 0)
+            (step() == Step::Preview)
+                .then(|| {
+                    let pcls = if dir() >= 0 { "pane fwd" } else { "pane back" };
+                    view! {
+                        <section class=pcls>
+                            <div class="pane-head">
+                                <h2 class="pane-title">"Review your playlist"</h2>
+                                <p class="pane-sub">
+                                    {move || {
+                                        let m = matched_count();
+                                        let ex = total().saturating_sub(m);
+                                        if ex > 0 {
+                                            format!("{m} tracks · {ex} not included")
+                                        } else {
+                                            format!("{m} tracks")
+                                        }
+                                    }}
+                                </p>
+                            </div>
+                            <div class="field">
+                                <label for="pl-name-input">"Playlist name"</label>
+                                <input
+                                    id="pl-name-input"
+                                    class="pl-name"
+                                    type="text"
+                                    prop:value=move || playlist_name.get()
+                                    on:input=move |ev| playlist_name.set(event_target_value(&ev))
+                                />
+                            </div>
+                            <ol class="preview-list">
+                                {move || {
+                                    rows.get()
+                                        .into_iter()
+                                        .filter(|r| kind(r) == Kind::Matched)
+                                        .filter_map(|r| {
+                                            r.selected.and_then(|i| r.candidates.get(i).cloned()).map(|c| {
+                                                let sub = [c.artist.clone(), c.album.clone()]
+                                                    .into_iter()
+                                                    .filter(|x| !x.is_empty())
+                                                    .collect::<Vec<_>>()
+                                                    .join(" · ");
+                                                let art = if c.image.is_empty() {
+                                                    view! { <span class="art art-ph" aria-hidden="true">"♪"</span> }
+                                                        .into_any()
+                                                } else {
+                                                    view! { <img class="art" src=c.image.clone() alt="" /> }
+                                                        .into_any()
+                                                };
+                                                view! {
+                                                    <li class="pv-row">
+                                                        {art}
+                                                        <div class="song-meta">
+                                                            <span class="name">{c.name.clone()}</span>
+                                                            <span class="sub">{sub}</span>
+                                                        </div>
+                                                    </li>
+                                                }
+                                                    .into_any()
+                                            })
+                                        })
+                                        .collect_view()
+                                }}
+                            </ol>
+                            {move || {
+                                create_result
+                                    .get()
+                                    .and_then(|r| r.err())
+                                    .map(|e| view! { <p class="result error">{format!("Error: {e}")}</p> })
+                            }}
+                            <div class="wizard-nav">
+                                <button
+                                    class="btn-ghost"
+                                    on:click=move |_: leptos::web_sys::MouseEvent| go(Step::Match)
+                                >
+                                    "← Back to matches"
+                                </button>
+                                {move || {
+                                    if authed.get() {
+                                        view! {
+                                            <button
+                                                class="btn-primary"
+                                                on:click=on_create
+                                                disabled=move || creating.get()
+                                            >
+                                                {move || {
+                                                    if creating.get() { "Creating…" } else { "Create playlist" }
+                                                }}
+                                            </button>
+                                        }
+                                            .into_any()
+                                    } else {
+                                        view! {
+                                            <a class="btn-primary" href="/login" rel="external">
+                                                "Connect Spotify to create it"
+                                            </a>
+                                        }
+                                            .into_any()
+                                    }
+                                }}
+                            </div>
+                        </section>
+                    }
+                })
+        }}
+
+        {move || {
+            (step() == Step::Match && total() > 0)
                 .then(|| {
                     let (m, rev, sk, res) = counts();
                     let mut parts: Vec<String> = Vec::new();
@@ -454,8 +670,9 @@ fn HomePage() -> impl IntoView {
                             </button>
                         }
                     };
+                    let pcls = if dir() >= 0 { "summary pane fwd" } else { "summary pane back" };
                     view! {
-                        <div class="summary">
+                        <div class=pcls>
                             <span class="summary-counts">{summary_text}</span>
                             <div class="filters" role="group" aria-label="Filter tracks">
                                 {chip(Filter::All, "All", m + rev + sk + res)}
@@ -468,7 +685,12 @@ fn HomePage() -> impl IntoView {
                 })
         }}
 
-        <div class="songs">
+        {move || {
+            (step() == Step::Match)
+                .then(|| {
+                    let pcls = if dir() >= 0 { "songs pane fwd" } else { "songs pane back" };
+                    view! {
+                        <div class=pcls>
             {move || {
                 let active = filter.get();
                 rows.get()
@@ -668,6 +890,75 @@ fn HomePage() -> impl IntoView {
                     })
                     .collect_view()
             }}
+                        </div>
+                    }
+                })
+        }}
+
+        {move || {
+            (step() == Step::Match)
+                .then(|| {
+                    let pcls = if dir() >= 0 { "wizard-nav pane fwd" } else { "wizard-nav pane back" };
+                    view! {
+                        <div class=pcls>
+                            <button
+                                class="btn-ghost"
+                                on:click=move |_: leptos::web_sys::MouseEvent| go(Step::Add)
+                            >
+                                "← Add more"
+                            </button>
+                            <button
+                                class="btn-primary"
+                                disabled=move || resolving_count() > 0 || matched_count() == 0
+                                on:click=move |_: leptos::web_sys::MouseEvent| go(Step::Preview)
+                            >
+                                {move || {
+                                    if resolving_count() > 0 {
+                                        "Finding matches…"
+                                    } else {
+                                        "Continue to preview →"
+                                    }
+                                }}
+                            </button>
+                        </div>
+                    }
+                })
+        }}
+
+        {move || {
+            (step() == Step::Done)
+                .then(|| {
+                    let pcls = if dir() >= 0 { "pane fwd" } else { "pane back" };
+                    let link = create_result.get().and_then(|r| r.ok());
+                    let embed = link.clone().and_then(|u| embed_src(&u));
+                    view! {
+                        <section class=pcls>
+                            <div class="done">
+                                <h2 class="pane-title">"Your playlist is live"</h2>
+                                <p class="pane-sub">"Added to your Spotify account."</p>
+                                {embed
+                                    .map(|e| {
+                                        view! {
+                                            <iframe class="sp-embed" src=e width="100%" height="380"></iframe>
+                                        }
+                                    })}
+                                <div class="wizard-nav center">
+                                    {link
+                                        .map(|u| {
+                                            view! {
+                                                <a class="btn-ghost" href=u target="_blank" rel="noreferrer">
+                                                    "Open in Spotify"
+                                                </a>
+                                            }
+                                        })}
+                                    <button class="btn-primary" on:click=reset>"Convert another"</button>
+                                </div>
+                            </div>
+                        </section>
+                    }
+                })
+        }}
+
         </div>
     }
 }

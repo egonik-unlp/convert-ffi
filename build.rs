@@ -52,8 +52,11 @@ fn main() {
         );
     }
     println!("cargo:rerun-if-changed=./convert-songs/build.zig");
-    println!("cargo:rerun-if-changed=./convert-songs/src/root.zig");
-    println!("cargo:rerun-if-changed=./convert-songs/src/main.zig");
+    println!("cargo:rerun-if-changed=./convert-songs/build.zig.zon");
+    // Watch the WHOLE Zig source tree (cargo scans dirs recursively) so a change
+    // to any .zig file rebuilds and re-copies the .so. Previously only root.zig
+    // and main.zig were watched, so edits to e.g. env.zig left a stale .so.
+    println!("cargo:rerun-if-changed=./convert-songs/src");
     // Spotify creds are now read from runtime env vars (not embedded), so the
     // build no longer depends on a .env file.
     // Link against (and find at runtime) the .so we just copied into the

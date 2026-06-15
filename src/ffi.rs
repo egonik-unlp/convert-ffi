@@ -93,6 +93,16 @@ unsafe extern "C" {
     fn spotify_authorize_url(redirect_uri: Str, state: Str) -> Str;
     fn exchange_code(code: Str, redirect_uri: Str) -> Str;
     fn create_playlist(token: Str, name: Str, description: Str, uris: StrList) -> Str;
+    fn debug_probe() -> Str;
+}
+
+/// Diagnostic: ask the native library to attempt a Spotify `client_credentials`
+/// token fetch and report the outcome (`token OK (len=N)` or `... FAILED: <err>`).
+/// Surfaced in the UI diagnostics panel to explain empty search results without
+/// needing host log access.
+pub fn debug_probe_safe() -> String {
+    let s = unsafe { debug_probe() };
+    s.to_owned_string()
 }
 
 /// Resolve a batch of tracks; each result is a list of up to 5 candidate

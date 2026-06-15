@@ -1,0 +1,3 @@
+[submodule "convert-songs"]
+	path = convert-songs
+	url = git@github.com:egonik-unlp/convert-songs.git
